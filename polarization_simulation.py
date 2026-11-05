@@ -1,0 +1,271 @@
+"""
+Polarization Simulation  -  Malus's Law with N polaroids
+=========================================================
+Jaypee Institute of Information Technology, Noida
+Physics PBL (ODD Semester, Session 2025-2026)
+
+What this program does
+----------------------
+1. Takes the number of polaroids and the transmission-axis angle of each one.
+2. Computes the transmitted intensity after every polaroid
+      * unpolarized light through the 1st polaroid   ->  I1 = I0 / 2
+      * every later polaroid (Malus's law)           ->  Ik = I(k-1) * cos^2(d_theta)
+3. Animates a travelling sinusoidal wave for every stage
+   (wave amplitude is proportional to sqrt(intensity)) next to a bar chart
+   of the relative intensity I / I0.
+
+Usage
+-----
+    python polarization_simulation.py                      # asks for input, then shows the animation
+    python polarization_simulation.py --angles 0 45 90     # no prompts
+    python polarization_simulation.py --angles 45 90 0 --save wave.gif
+    python polarization_simulation.py --angles 45 90 0 --static   # snapshot only
+    python polarization_simulation.py --malus              # I vs angle curve
+
+Requires: numpy, matplotlib  (Pillow is needed only for --save *.gif)
+"""
+
+import argparse
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+
+
+# --------------------------------------------------------------------------
+# Physics
+# --------------------------------------------------------------------------
+def intensity_after_polarization(I0, angles, unpolarized=True):
+    """
+    Intensity of light after each polaroid in a stack.
+
+    Parameters
+    ----------
+    I0          : intensity of the incident light
+    angles      : transmission-axis angles of the polaroids (degrees)
+    unpolarized : True  -> incident light is unpolarized (ordinary sunlight / bulb)
+                  False -> incident light is already linearly polarized at 0 degrees
+
+    Returns
+    -------
+    list [I0, I1, ..., In]  - intensity before the stack and after each polaroid.
+    """
+    intensities = [float(I0)]
+    if len(angles) == 0:
+        return intensities
+
+    # First polaroid
+    if unpolarized:
+        # <cos^2(phi)> over all random orientations = 1/2
+        current = I0 / 2.0
+    else:
+        current = I0 * np.cos(np.radians(angles[0])) ** 2
+    intensities.append(current)
+
+    # Remaining polaroids: Malus's law with respect to the PREVIOUS axis
+    for k in range(1, len(angles)):
+        delta = np.radians(angles[k] - angles[k - 1])
+        current = current * np.cos(delta) ** 2
+        intensities.append(current)
+
+    # remove floating-point dust such as 3.7e-33 when cos(90 deg) is evaluated
+    return [0.0 if abs(v) < 1e-12 else float(v) for v in intensities]
+
+
+def malus_table(I0=1.0, step=15):
+    """Return (theta, I) for a single analyser acting on polarized light."""
+    theta = np.arange(0, 90 + step, step)
+    return theta, I0 * np.cos(np.radians(theta)) ** 2
+
+
+# --------------------------------------------------------------------------
+# Input helpers
+# --------------------------------------------------------------------------
+def ask_angles():
+    """Interactive input with basic validation (press Enter for the project example)."""
+    print("\nPress Enter at any prompt to use the project example: 3 polaroids at 45, 90, 0 degrees.")
+    default = [45.0, 90.0, 0.0]
+
+    while True:
+        raw = input("Enter the number of polaroids (1-6) [3]: ").strip()
+        if raw == "":
+            n = 3
+            break
+        try:
+            n = int(raw)
+            if 1 <= n <= 6:
+                break
+            print("  Please enter a number between 1 and 6.")
+        except ValueError:
+            print("  Please enter a whole number.")
+
+    angles = []
+    for i in range(n):
+        d = default[i] if n == 3 else None
+        hint = f" [{d:g}]" if d is not None else ""
+        while True:
+            raw = input(f"Enter angle for Polaroid {i + 1} (degrees){hint}: ").strip()
+            if raw == "" and d is not None:
+                angles.append(d)
+                break
+            try:
+                angles.append(float(raw))
+                break
+            except ValueError:
+                print("  Please enter a number.")
+    return angles
+
+
+# --------------------------------------------------------------------------
+# Plotting
+# --------------------------------------------------------------------------
+def build_figure(angles, I0=1.0):
+    """Create the figure; return (fig, lines, x, amplitudes, intensities)."""
+    intensities = intensity_after_polarization(I0, angles)
+    amplitudes = [np.sqrt(I / I0) for I in intensities]       # amplitude ~ sqrt(I)
+    n = len(angles)
+    colors = plt.cm.viridis(np.linspace(0, 0.92, n + 1))
+
+    fig, (ax, axb) = plt.subplots(
+        1, 2, figsize=(13, 5.6), gridspec_kw={"width_ratios": [2.3, 1]}
+    )
+    fig.suptitle("Polarization Simulation - Malus's Law", fontsize=15, fontweight="bold")
+
+    # ----- left: waves -----
+    ax.set_xlim(0, 2 * np.pi)
+    ax.set_ylim(-1.25, 1.25)
+    ax.set_xlabel("Position along the propagation direction (rad)")
+    ax.set_ylabel("Relative electric-field amplitude")
+    ax.set_title("Wave after each stage")
+    ax.axhline(0, color="grey", lw=0.8)
+    ax.grid(alpha=0.3)
+
+    x = np.linspace(0, 2 * np.pi, 800)
+    lines = []
+    for i in range(n + 1):
+        if i == 0:
+            label = f"Incident light  (I = {intensities[0]:.3f} I0)"
+        else:
+            label = (f"After Polaroid {i} @ {angles[i - 1]:g} deg  "
+                     f"(I = {intensities[i] / I0:.3f} I0)")
+        (line,) = ax.plot([], [], lw=2.2, color=colors[i], label=label)
+        lines.append(line)
+    ax.legend(loc="upper right", fontsize=8.5, framealpha=0.95)
+
+    # ----- right: intensity bars -----
+    names = ["Incident"] + [f"P{i}" for i in range(1, n + 1)]
+    bars = axb.bar(names, [I / I0 for I in intensities], color=colors, edgecolor="black")
+    axb.set_ylim(0, 1.15)
+    axb.set_ylabel("Relative intensity  I / I0")
+    axb.set_title("Transmitted intensity")
+    axb.grid(axis="y", alpha=0.3)
+    for b, I in zip(bars, intensities):
+        axb.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.02,
+                 f"{I / I0:.3f}", ha="center", fontsize=9)
+
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    return fig, lines, x, amplitudes, intensities
+
+
+def simulate_polarization(angles, save=None, static=False, show=True):
+    """Build and (optionally) animate / save the simulation."""
+    fig, lines, x, amps, intensities = build_figure(angles)
+
+    def draw(frame):
+        phase = frame * 0.12                       # wave travels to the right
+        for line, A in zip(lines, amps):
+            line.set_data(x, A * np.sin(x - phase))
+        return lines
+
+    if static:
+        draw(0)
+        if save:
+            fig.savefig(save, dpi=200)
+            print(f"Saved snapshot to {save}")
+        if show:
+            plt.show()
+        return fig, intensities
+
+    anim = FuncAnimation(fig, draw, frames=np.arange(0, 120),
+                         interval=30, blit=True)
+    if save:
+        anim.save(save, writer="pillow", fps=30)
+        print(f"Saved animation to {save}")
+    if show:
+        plt.show()
+    return fig, intensities
+
+
+def plot_malus_curve(save=None, show=True):
+    """Plot I = I0 cos^2(theta) with the sample points of malus_table()."""
+    theta = np.linspace(0, 180, 361)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(theta, np.cos(np.radians(theta)) ** 2, lw=2.5, color="#0F8B8D",
+            label=r"$I = I_0\cos^2\theta$")
+    t, I = malus_table(step=15)
+    ax.scatter(t, I, color="#E07A1F", zorder=3, label="simulated points (0-90 deg)")
+    ax.set_xlabel("Angle between polarizer and analyser, theta (degrees)")
+    ax.set_ylabel("Relative intensity  I / I0")
+    ax.set_title("Malus's Law")
+    ax.set_xticks(range(0, 181, 30))
+    ax.grid(alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    if save:
+        fig.savefig(save, dpi=200)
+    if show:
+        plt.show()
+    return fig
+
+
+# --------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------
+def print_results(angles, intensities):
+    print("\nStage                    Angle    I / I0")
+    print("-" * 38)
+    print(f"{'Incident light':<24}{'-':>5}{intensities[0]:>10.4f}")
+    for i, (a, I) in enumerate(zip(angles, intensities[1:]), start=1):
+        print(f"{'After Polaroid ' + str(i):<24}{a:>5g}{I / intensities[0]:>10.4f}")
+    print("-" * 38)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Polarization / Malus's law simulation")
+    parser.add_argument("--angles", type=float, nargs="+",
+                        help="polaroid angles in degrees, e.g. --angles 45 90 0")
+    parser.add_argument("--save", help="save output (.gif for animation, .png with --static)")
+    parser.add_argument("--static", action="store_true", help="draw a single snapshot")
+    parser.add_argument("--malus", action="store_true", help="plot the I vs angle curve")
+    parser.add_argument("--no-show", action="store_true", help="do not open a window")
+    args = parser.parse_args()
+    show = not args.no_show
+
+    if args.malus:
+        plot_malus_curve(save=args.save, show=show)
+        return
+
+    # Command-line angles given -> run once.  Otherwise ask, show, and offer to repeat.
+    if args.angles:
+        I0 = 1.0
+        print_results(args.angles, intensity_after_polarization(I0, args.angles))
+        simulate_polarization(args.angles, save=args.save, static=args.static, show=show)
+        return
+
+    print("=" * 56)
+    print("   POLARIZATION SIMULATION  (Malus's Law)")
+    print("=" * 56)
+    while True:
+        angles = ask_angles()
+        I0 = 1.0
+        print_results(angles, intensity_after_polarization(I0, angles))
+        print("\nOpening the animation window... close it to continue.")
+        simulate_polarization(angles, save=args.save, static=args.static, show=show)
+        again = input("\nRun again with different angles? (y/n) [n]: ").strip().lower()
+        if again != "y":
+            print("Done. Goodbye!")
+            break
+
+
+if __name__ == "__main__":
+    main()
